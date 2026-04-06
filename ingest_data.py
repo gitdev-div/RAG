@@ -1,8 +1,8 @@
 """
-ingest_data.py — Document ingestion pipeline (standalone script).
+ingest_data.py — Document ingestion pipeline.
 
-Reads every file in DATA_DIR, splits it into text chunks, encodes each
-chunk into a vector, and stores everything in Elasticsearch.
+Reads every file in DATA_DIR, splits it into overlapping text chunks,
+encodes each chunk into a vector, and stores everything in Elasticsearch.
 
 Supported file types: .txt  .pdf  .docx
 
@@ -11,98 +11,133 @@ Usage:
 """
 
 import os
-from PyPDF2 import PdfReader
-from docx import Document
+import fitz          # PyMuPDF — PDF parsing
+import docx          # python-docx — Word parsing
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
 
-from config import ES_HOST, ES_INDEX, EMBEDDING_MODEL, VECTOR_DIMS, DATA_DIR
+import config
 
-# ── Clients ──────────────────────────────────────────────────────────────────
-es    = Elasticsearch(ES_HOST)
-model = SentenceTransformer(EMBEDDING_MODEL)
+# ── Clients (initialised once at import time) ─────────────────────────────────
+es    = Elasticsearch(config.ES_HOST)
+model = SentenceTransformer(config.EMBEDDING_MODEL)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Text extraction ───────────────────────────────────────────────────────────
+
+def extract_text_from_pdf(file_path: str) -> str:
+    text = ""
+    with fitz.open(file_path) as doc:
+        for page in doc:
+            text += page.get_text() + "\n"
+    return text
+
+def extract_text_from_docx(file_path: str) -> str:
+    doc = docx.Document(file_path)
+    return "\n".join(para.text for para in doc.paragraphs)
+
+def extract_text_from_txt(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 def extract_text(file_path: str) -> str:
-    """Extract raw text from a .txt, .pdf, or .docx file."""
+    """Dispatch to the correct extractor based on file extension."""
     ext = os.path.splitext(file_path)[1].lower()
-
-    if ext == ".txt":
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-
     if ext == ".pdf":
-        reader = PdfReader(file_path)
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-
+        return extract_text_from_pdf(file_path)
     if ext == ".docx":
-        doc = Document(file_path)
-        return "\n".join(p.text for p in doc.paragraphs)
-
-    print(f"⚠️   Skipping unsupported file type: {file_path}")
+        return extract_text_from_docx(file_path)
+    if ext == ".txt":
+        return extract_text_from_txt(file_path)
     return ""
 
 
-def _ensure_index() -> None:
+# ── Chunking ──────────────────────────────────────────────────────────────────
+
+def get_chunks(text: str, size: int = config.CHUNK_SIZE,
+               overlap: int = config.CHUNK_OVERLAP) -> list[str]:
+    """
+    Split text into overlapping windows of `size` characters,
+    advancing `size - overlap` characters each step.
+
+    BUG FIX: the original version appended the final slice twice —
+    once in the main loop and again in the early-exit branch.
+    This version uses a clean while-loop with a single append path.
+    """
+    if not text:
+        return []
+
+    chunks = []
+    start  = 0
+    step   = size - overlap     # how far to advance each iteration
+
+    while start < len(text):
+        chunks.append(text[start : start + size])
+        start += step
+
+    return chunks
+
+
+# ── Index management ──────────────────────────────────────────────────────────
+
+def create_index() -> None:
     """Create the Elasticsearch index with the correct mapping if it doesn't exist."""
-    if es.indices.exists(index=ES_INDEX):
+    if es.indices.exists(index=config.ES_INDEX):
         return
 
     mapping = {
         "mappings": {
             "properties": {
-                "text":      {"type": "text"},
-                "source":    {"type": "keyword"},
-                "embedding": {
+                "text":   {"type": "text"},
+                "source": {"type": "keyword"},
+                "vector": {
                     "type":       "dense_vector",
-                    "dims":       VECTOR_DIMS,
+                    "dims":       config.VECTOR_DIMS,
                     "index":      True,
                     "similarity": "cosine",
                 },
             }
         }
     }
-    es.indices.create(index=ES_INDEX, body=mapping)
-    print(f"✅  Created index '{ES_INDEX}'")
+    es.indices.create(index=config.ES_INDEX, body=mapping)
+    print(f"✅  Created index '{config.ES_INDEX}'")
 
 
-# ── Main ingestion logic ─────────────────────────────────────────────────────
+# ── Main ingestion ────────────────────────────────────────────────────────────
 
 def run_ingestion() -> None:
-    """Ingest all documents found in DATA_DIR into Elasticsearch."""
-    _ensure_index()
+    """Ingest all supported documents found in DATA_DIR."""
+    create_index()
 
-    files = [f for f in os.listdir(DATA_DIR) if not f.startswith(".")]
+    files = [f for f in os.listdir(config.DATA_DIR) if not f.startswith(".")]
     if not files:
-        print(f"ℹ️   No files found in {DATA_DIR}. Add documents and re-run.")
+        print(f"ℹ️   No files found in {config.DATA_DIR}/. Add documents and re-run.")
         return
 
     for filename in files:
-        file_path = os.path.join(DATA_DIR, filename)
+        file_path = os.path.join(config.DATA_DIR, filename)
         print(f"\n📄  Processing: {filename}")
 
-        raw_text = extract_text(file_path)
-        if not raw_text.strip():
-            print(f"    ⚠️  No text extracted — skipping.")
+        text = extract_text(file_path)
+        if not text.strip():
+            print("    ⚠️  No text extracted — skipping.")
             continue
 
-        # Split into paragraphs; discard very short fragments
-        chunks = [c.strip() for c in raw_text.split("\n\n") if len(c.strip()) > 20]
-        print(f"    → {len(chunks)} chunk(s) found")
+        chunks = get_chunks(text)
+        print(f"    → {len(chunks)} chunk(s)")
 
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             vector = model.encode(chunk).tolist()
-            es.index(index=ES_INDEX, document={
-                "text":      chunk,
-                "embedding": vector,
-                "source":    filename,
+            es.index(index=config.ES_INDEX, document={
+                "text":     chunk,
+                "vector":   vector,
+                "source":   filename,
+                "chunk_id": i,
             })
 
         print(f"    ✅  Indexed {len(chunks)} chunk(s)")
 
-    print("\n🎉  Ingestion complete — all files stored in Elasticsearch.\n")
+    print("\n🎉  Ingestion complete.\n")
 
 
 if __name__ == "__main__":

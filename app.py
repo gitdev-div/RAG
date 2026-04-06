@@ -1,147 +1,109 @@
-"""
-app.py — Flask web interface for the RAG Agent.
-
-Provides two endpoints:
-    POST /upload   — Upload a document and ingest it into Elasticsearch
-    POST /chat     — Send a message and receive an AI answer
-
-Usage:
-    python app.py
-    Then open http://localhost:5000 in your browser.
-"""
-
-import os
-import requests
-from flask import Flask, render_template, request, jsonify
+import requests, keyring, io
+import pandas as pd
+from flask import Flask, request, render_template, jsonify
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
-from PyPDF2 import PdfReader
+import PyPDF2
 from docx import Document
+import config
 
-from config import ES_HOST, ES_INDEX, EMBEDDING_MODEL, VECTOR_DIMS, DATA_DIR
-from api_keys import get_api_key
-
-# ── App setup ─────────────────────────────────────────────────────────────────
+# --- 1. INITIALIZE APP FIRST (Fixes NameError) ---
 app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = DATA_DIR
 
-# ── Clients (initialised once) ────────────────────────────────────────────────
-es      = Elasticsearch(ES_HOST)
-model   = SentenceTransformer(EMBEDDING_MODEL)
-API_KEY = get_api_key()
+# --- 2. INITIALIZE TOOLS ---
+es = Elasticsearch(config.ES_HOST)
+model = SentenceTransformer(config.EMBEDDING_MODEL)
+API_KEY = keyring.get_password("openrouter", "api_key")
 
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_DEFAULT_MODEL  = "google/gemini-2.0-flash-001"
+def extract_text(file):
+    name = file.filename.lower()
+    stream = io.BytesIO(file.read())
+    
+    if name.endswith('.pdf'):
+        reader = PyPDF2.PdfReader(stream)
+        return "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
+    elif name.endswith('.docx'):
+        doc = Document(stream)
+        return "\n".join([p.text for p in doc.paragraphs])
+    elif name.endswith('.csv'):
+        df = pd.read_csv(stream)
+        return df.to_string()
+    else: # Default to TXT
+        try: return stream.getvalue().decode('utf-8')
+        except: return stream.getvalue().decode('latin-1', errors='ignore')
 
+def get_chunks(text):
+    start = 0
+    while start < len(text):
+        yield text[start : start + config.CHUNK_SIZE]
+        start += (config.CHUNK_SIZE - config.CHUNK_OVERLAP)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def extract_text(file_path: str) -> str:
-    """Extract plain text from .txt, .pdf, or .docx files."""
-    ext = os.path.splitext(file_path)[1].lower()
-
-    if ext == ".txt":
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    if ext == ".pdf":
-        reader = PdfReader(file_path)
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-
-    if ext == ".docx":
-        doc = Document(file_path)
-        return "\n".join(p.text for p in doc.paragraphs)
-
-    return ""
-
-
-def _language_instruction(lang_code: str) -> str:
-    instructions = {
-        "he": "Always answer in Hebrew (עברית).",
-        "en": "Always answer in English.",
-    }
-    return instructions.get(lang_code, "Answer in the same language as the question.")
-
-
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@app.route("/")
+# --- 3. DEFINE ROUTES ---
+@app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('index.html')
 
+@app.route('/upload', methods=['POST'])
+def upload():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file"}), 400
+    
+    file = request.files['file']
+    text = extract_text(file)
+    
+    # Reset Elasticsearch Index
+    if es.indices.exists(index=config.ES_INDEX):
+        es.indices.delete(index=config.ES_INDEX)
+    
+    es.indices.create(index=config.ES_INDEX, body={
+        "mappings": {"properties": {
+            "text": {"type": "text"},
+            "vector": {"type": "dense_vector", "dims": config.VECTOR_DIMS, "index": True, "similarity": "cosine"}
+        }}
+    })
 
-@app.route("/upload", methods=["POST"])
-def upload_file():
-    """Receive a file, extract its text, embed it, and store in Elasticsearch."""
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided."}), 400
-
-    file = request.files["file"]
-    if not file.filename:
-        return jsonify({"error": "Empty filename."}), 400
-
-    file_path = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
-    file.save(file_path)
-
-    content = extract_text(file_path)
-    chunks  = [c.strip() for c in content.split("\n\n") if len(c.strip()) > 10]
-
+    chunks = list(get_chunks(text))
     for chunk in chunks:
-        vector = model.encode(chunk).tolist()
-        es.index(index=ES_INDEX, document={
-            "text":      chunk,
-            "embedding": vector,
-            "filename":  file.filename,
-        })
-
+        if not chunk.strip(): continue
+        vec = model.encode(chunk).tolist()
+        es.index(index=config.ES_INDEX, document={"text": chunk, "vector": vec})
+    
     return jsonify({"status": "success", "filename": file.filename, "chunks": len(chunks)})
 
-
-@app.route("/chat", methods=["POST"])
+@app.route('/chat', methods=['POST'])
 def chat():
-    """Perform RAG: retrieve context, build prompt, call LLM, return answer."""
-    body       = request.get_json(force=True)
-    user_msg   = body.get("message", "").strip()
-    target_lang = body.get("language", "auto")
+    data = request.json
+    msg = data.get("message")
+    lang = data.get("lang", "en")
+    
+    # Multilingual System Prompt
+    prompts = {
+        "en": "Answer in English based on the context.",
+        "he": "ענה בעברית בלבד על סמך ההקשר המצורף. שמור על כיוון כתיבה מימין לשמאל.",
+        "ru": "Отвечай строго на русском языке на основе предоставленного контекста."
+    }
+    sys_instr = prompts.get(lang, prompts["en"])
 
-    if not user_msg:
-        return jsonify({"error": "Empty message."}), 400
-
-    # 1 — Retrieve
-    query_vector = model.encode(user_msg).tolist()
-    search_res   = es.search(
-        index=ES_INDEX,
-        knn={
-            "field":          "embedding",
-            "query_vector":   query_vector,
-            "k":              3,
-            "num_candidates": 100,
-        },
-    )
-    context = "\n\n".join(h["_source"]["text"] for h in search_res["hits"]["hits"])
-
-    # 2 — Augment
-    lang_note = _language_instruction(target_lang)
-    prompt = (
-        f"Context:\n{context}\n\n"
-        f"Question: {user_msg}\n\n"
-        f"{lang_note}"
-    )
-
-    # 3 — Generate
-    response = requests.post(
-        _OPENROUTER_URL,
+    vec = model.encode(msg).tolist()
+    res = es.search(index=config.ES_INDEX, knn={
+        "field": "vector", "query_vector": vec, 
+        "k": config.TOP_K_RESULTS, "num_candidates": 100
+    })
+    
+    context = "\n---\n".join([h["_source"]["text"] for h in res["hits"]["hits"]])
+    
+    api_res = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {API_KEY}"},
-        json={"model": _DEFAULT_MODEL, "messages": [{"role": "user", "content": prompt}]},
-        timeout=30,
+        json={
+            "model": "google/gemini-2.0-flash-001",
+            "messages": [
+                {"role": "system", "content": sys_instr},
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {msg}"}
+            ]
+        }
     )
-    response.raise_for_status()
-    answer = response.json()["choices"][0]["message"]["content"]
+    return jsonify({"response": api_res.json()['choices'][0]['message']['content']})
 
-    return jsonify({"reply": answer})
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    app.run(debug=True)
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
