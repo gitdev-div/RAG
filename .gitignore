@@ -1,42 +1,75 @@
-# --- Python Virtual Environments ---
+# =========================
+# 🐍 Python Environments
+# =========================
 venv/
 .venv/
 env/
+ENV/
 bin/
 lib/
 include/
 
-# --- System Caches & Temporary Files ---
+# =========================
+# 🧠 Python Cache
+# =========================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+
+# =========================
+# 💻 IDE & OS Files
+# =========================
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# --- Data & Large Test Files ---
-# (Excluding these keeps your repo lightweight)
+# =========================
+# 📂 Data & Local Files
+# =========================
+# Keep repository lightweight
 data/
 files to test/
 image_files/
 query/
 mnt/
+
+# Documents (large / private)
 *.pdf
 *.docx
+
+# Logs
 *.log
 
-# --- Security & Credentials ---
-# (CRITICAL: Never upload these to GitHub)
-api_keys.py
-openrouter.py
+# =========================
+# 🔐 Security & Secrets
+# =========================
+# NEVER commit secrets
 .env
 .flaskenv
 auth.json
+api_keys.py
+openrouter.py
 
-# --- Build & Distribution ---
+# =========================
+# 📦 Build & Distribution
+# =========================
 dist/
 build/
 *.egg-info/
+
+# =========================
+# 🐳 Docker (optional)
+# =========================
+*.pid
+*.seed
+*.out
+
+# =========================
+# 🧪 Testing
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
