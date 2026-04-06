@@ -1,100 +1,107 @@
-<div align="center">
+# RAG Agent
 
-# 🤖 RAG Agent — Dynamic Retrieval-Augmented Generation
-
-### Isolated Sessions · Multi-Format Support · Multilingual (EN/HE/RU)
-
-[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.13.0-005571?style=flat-square&logo=elasticsearch&logoColor=white)](https://www.elastic.co/)
-[![Flask](https://img.shields.io/badge/Flask-3.0.2-000000?style=flat-square&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
-
-A professional RAG pipeline featuring **Zero-Contamination architecture**.  
-Upload any document and instantly chat with it using high-precision vector search and sliding-window context preservation.
-
-[Quick Start](#-quick-start) · [Advanced RAG](#-advanced-rag-capabilities) · [Architecture](#-architecture) · [Deployment](#-deployment)
-
-</div>
+> Dynamic Retrieval-Augmented Generation with zero-contamination architecture, multilingual support, and semantic vector search.
 
 ---
 
-## ✨ Features
+## Features
 
 | Feature | Details |
 |---|---|
-| 📄 **Universal Ingestion** | PDF, DOCX, **CSV**, and TXT support with real-time indexing |
-| 🔍 **Semantic Search** | Elasticsearch kNN vector search using `all-MiniLM-L6-v2` |
-| 🧠 **LLM Gateway** | OpenRouter API — **Gemini 2.0 Flash** |
-| 🌍 **Trilingual Support** | English, Hebrew, Russian + RTL UI |
-| 🔐 **Secure Key Storage** | OS-level keyring (no plaintext secrets) |
-| 🏠 **Privacy-First** | Local embeddings and parsing |
-| 🐳 **Docker Ready** | Containerized deployment |
+| Universal ingestion | PDF, DOCX, CSV, TXT with real-time indexing |
+| Semantic search | Elasticsearch kNN via `all-MiniLM-L6-v2` |
+| LLM gateway | OpenRouter API — Gemini 2.0 Flash |
+| Trilingual support | English, Hebrew, Russian + RTL UI |
+| Secure key storage | OS-level keyring — no plaintext secrets |
+| Privacy-first | Local embeddings and parsing |
+| Docker ready | Containerized deployment |
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-```mermaid
-graph TD
-    User((User)) -->|Question| UI[Frontend Toggle: EN/HE/RU]
-    UI -->|Query + Lang| App[Flask Backend]
+```
+User → Frontend (EN/HE/RU toggle) → Flask Backend
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    │ Vector Engine                            │
+                    │  Query → all-MiniLM-L6-v2 → Elasticsearch kNN → Context Builder │
+                    └────────────────────┬────────────────────┘
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    │ LLM Layer                               │
+                    │  Context → Gemini 2.0 Flash → Response  │
+                    └────────────────────┬────────────────────┘
+                                         │
+                                       User
+```
 
-    subgraph Vector_Engine
-        App -->|Embed| Embedder[all-MiniLM-L6-v2]
-        Embedder -->|Vector| ES[(Elasticsearch kNN)]
-        ES -->|Top-10| Context[Context Builder]
-    end
+### Advanced RAG capabilities
 
-    subgraph LLM_Layer
-        Context -->|Prompt| LLM[Gemini 2.0 Flash]
-        LLM -->|Response| App
-    end
+| Capability | Implementation | Benefit |
+|---|---|---|
+| Zero contamination | Index reset on upload & restart | Prevents data leakage |
+| Sliding window | 1200 chars + 200 overlap | Preserves cross-chunk context |
+| Deep retrieval | TOP_K = 10 (~12k tokens) | Higher answer accuracy |
+| Multilingual logic | Cross-language prompts | Ask in RU/HE, retrieve from EN docs |
 
-    App -->|Answer| User
-🧠 Advanced RAG Capabilities
-Capability	Technical Implementation	Benefit
-♻️ Zero-Contamination	Index reset on upload & restart	Prevents data leakage
-🧩 Sliding Window	1200 chars + 200 overlap	Preserves context
-🔎 Deep Retrieval	TOP_K = 10 (~12k tokens)	Better accuracy
-🌐 Multilingual Logic	Cross-language prompts	Ask in RU/HE → answer from EN docs
-🚀 Quick Start
-1 · Clone & Install
+---
+
+## Quick start
+
+### 1. Clone and install
+
+```bash
 git clone https://github.com/your-username/rag-agent.git
 cd rag-agent
 pip install -r requirements.txt
-2 · Start Elasticsearch
+```
+
+### 2. Start Elasticsearch
+
+```bash
 docker run -d \
   --name elasticsearch \
   -p 9200:9200 \
   -e "discovery.type=single-node" \
   -e "xpack.security.enabled=false" \
   docker.elastic.co/elasticsearch/elasticsearch:8.13.0
-3 · Store API Key
+```
+
+### 3. Store your API key
+
+```bash
 python -c "import keyring; keyring.set_password('openrouter', 'api_key', 'YOUR_KEY_HERE')"
-4 · Run App
+```
+
+### 4. Run the app
+
+```bash
 flask run
+```
 
-Open: http://localhost:5000
+Open [http://localhost:5000](http://localhost:5000)
 
-⚙️ Configuration (config.py)
-Variable	Value	Description
-CHUNK_SIZE	1200	Text chunk size
-CHUNK_OVERLAP	200	Context overlap
-TOP_K_RESULTS	10	Retrieved chunks
-EMBEDDING_MODEL	all-MiniLM-L6-v2	Vector model
-🧪 Quality Assurance
-✅ Isolation Test
-Upload file → restart server
-Expected: no memory
-✅ Multilingual Test
-Ask Hebrew/Russian on English doc
-Expected: correct answer
-✅ Format Test
-Upload CSV
-Ask for data
-Expected: structured retrieval
-🚀 Deployment
-Docker Compose
+---
+
+## Configuration
+
+Edit `config.py` to tune the pipeline:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CHUNK_SIZE` | `1200` | Text chunk size in characters |
+| `CHUNK_OVERLAP` | `200` | Overlap between adjacent chunks |
+| `TOP_K_RESULTS` | `10` | Number of chunks retrieved per query |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence transformer model |
+
+---
+
+## Deployment
+
+### Docker Compose
+
+```yaml
 version: "3.9"
 
 services:
@@ -110,15 +117,32 @@ services:
     build: .
     ports:
       - "5000:5000"
+```
+
+```bash
 docker-compose up --build
-🛡️ Security
-No plaintext API keys
-Local document processing
-.gitignore protects sensitive data
-<div align="center">
+```
 
-Made with ❤️ ·
-<a href="https://github.com/gitdev-div/RAG/issues">Report a Bug</a> ·
-<a href="https://github.com/gitdev-div/RAG/issues">Request a Feature</a>
+---
 
-</div> ```
+## Quality assurance
+
+**Isolation test** — upload a file, restart the server. Expected: no memory of previous session.
+
+**Multilingual test** — ask a question in Hebrew or Russian against an English document. Expected: correct answer retrieved and translated.
+
+**Format test** — upload a CSV and ask for specific data. Expected: structured retrieval and accurate response.
+
+---
+
+## Security
+
+- No plaintext API keys — stored in OS-level keyring
+- Local document parsing — files never leave your machine
+- `.gitignore` protects secrets and uploads
+
+---
+
+## Contributing
+
+[Report a bug](https://github.com/gitdev-div/RAG/issues) · [Request a feature](https://github.com/gitdev-div/RAG/issues)
