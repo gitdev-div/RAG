@@ -1,0 +1,42 @@
+# --- Python Virtual Environments ---
+venv/
+.venv/
+env/
+bin/
+lib/
+include/
+
+# --- System Caches & Temporary Files ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Data & Large Test Files ---
+# (Excluding these keeps your repo lightweight)
+data/
+files to test/
+image_files/
+query/
+mnt/
+*.pdf
+*.docx
+*.log
+
+# --- Security & Credentials ---
+# (CRITICAL: Never upload these to GitHub)
+api_keys.py
+openrouter.py
+.env
+.flaskenv
+auth.json
+
+# --- Build & Distribution ---
+dist/
+build/
+*.egg-info/

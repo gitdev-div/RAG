@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Knowledge Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .chat-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
+    </style>
+</head>
+<body class="chat-gradient text-slate-200 h-screen flex flex-col font-sans">
+
+    <header class="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-900/50 backdrop-blur-md">
+        <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+            Document AI Agent
+        </h1>
+        
+        <div class="flex items-center gap-4">
+            <select id="langSelect" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500">
+                <option value="auto">🌐 זיהוי שפה אוטומטי</option>
+                <option value="he">🇮🇱 עברית</option>
+                <option value="en">🇺🇸 English</option>
+            </select>
+            
+            <div class="relative group">
+                <input type="file" id="fileInput" class="hidden" onchange="uploadFile()">
+                <label for="fileInput" class="cursor-pointer bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-full text-sm font-medium transition-all shadow-lg shadow-blue-900/20">
+                    📤 העלה מסמך
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <div id="status" class="text-center text-xs py-1 text-slate-400 h-6"></div>
+
+    <main id="chatBox" class="flex-1 overflow-y-auto p-6 space-y-4">
+        <div class="bg-slate-800/50 p-4 rounded-2xl max-w-fit ml-auto border border-slate-700">
+            שלום! אני הסוכן החכם שלך. העלה מסמך (PDF/DOCX) ואשמח לענות על כל שאלה.
+        </div>
+    </main>
+
+    <footer class="p-6 bg-slate-900/80 border-t border-slate-700">
+        <div class="max-w-4xl mx-auto flex gap-4">
+            <input type="text" id="userInput" 
+                   class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                   placeholder="כתוב את השאלה שלך כאן...">
+            <button onclick="sendChat()" 
+                    class="bg-emerald-600 hover:bg-emerald-500 px-8 py-3 rounded-xl font-bold transition-all transform active:scale-95 shadow-lg shadow-emerald-900/20">
+                שלח
+            </button>
+        </div>
+    </footer>
+
+    <script>
+        async function uploadFile() {
+            const file = document.getElementById('fileInput').files[0];
+            const status = document.getElementById('status');
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            status.innerText = `⏳ מעבד את ${file.name}...`;
+            try {
+                await fetch('/upload', { method: 'POST', body: formData });
+                status.innerText = `✅ המסמך '${file.name}' מוכן לשימוש!`;
+            } catch (e) {
+                status.innerText = "❌ שגיאה בהעלאה";
+            }
+        }
+
+        async function sendChat() {
+            const input = document.getElementById('userInput');
+            const box = document.getElementById('chatBox');
+            const lang = document.getElementById('langSelect').value;
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            // הוספת הודעת משתמש
+            box.innerHTML += `<div class="bg-blue-600/20 p-4 rounded-2xl max-w-[80%] border border-blue-500/30"><b>אתה:</b> ${msg}</div>`;
+            input.value = '';
+            box.scrollTop = box.scrollHeight;
+
+            try {
+                const res = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ message: msg, language: lang })
+                });
+                const data = await res.json();
+                
+                // הוספת הודעת AI
+                box.innerHTML += `<div class="bg-slate-800 p-4 rounded-2xl max-w-[80%] border border-slate-700 mr-auto"><b>בוט:</b> ${data.reply}</div>`;
+                box.scrollTop = box.scrollHeight;
+            } catch (e) {
+                box.innerHTML += `<div class="text-red-400">שגיאה בתקשורת עם השרת</div>`;
+            }
+        }
+
+        // תמיכה ב-Enter לשליחה
+        document.getElementById('userInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendChat();
+        });
+    </script>
+</body>
+</html>
